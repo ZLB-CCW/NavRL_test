@@ -109,3 +109,10 @@ isaac-training/training/scripts/outputs/
 isaac-training/third_party/warp/_build/
 
 isaac-training/outputs/
+
+# ROS catkin generated files
+catkin_ws/build/
+catkin_ws/devel/
+catkin_ws/install/
+catkin_ws/logs/
+catkin_ws/.catkin_tools/

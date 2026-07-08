@@ -1,0 +1,32 @@
+<launch>
+    <arg name="use_px4" default="false" />
+    <arg name="use_safety_shield" default="true" />
+    <arg name="rviz" default="true" />
+    <arg name="start_navigation" default="true" />
+    <arg name="target_prefix" default="target_car" />
+    <arg name="lead_time" default="0.0" />
+
+    <include file="$(find uav_simulator)/launch/start.launch">
+        <arg name="world_name" value="$(find uav_simulator)/worlds/target_tracking/complex_car_tracking.world" />
+    </include>
+
+    <include file="$(find navigation_runner)/launch/safety_and_perception_sim.launch">
+        <arg name="use_px4" value="$(arg use_px4)" />
+        <arg name="use_prebuilt_map" value="false" />
+        <arg name="use_real_detector" value="false" />
+        <arg name="use_safety_shield" value="$(arg use_safety_shield)" />
+        <arg name="rviz" value="$(arg rviz)" />
+    </include>
+
+    <node pkg="navigation_runner" type="ground_target_goal_publisher.py" name="ground_target_goal_publisher" output="screen">
+        <param name="target_prefix" value="$(arg target_prefix)" />
+        <param name="goal_height" value="1.0" />
+        <param name="lead_time" value="$(arg lead_time)" />
+        <param name="publish_rate" value="10.0" />
+    </node>
+
+    <group if="$(arg start_navigation)">
+        <param name="rl/use_px4" value="$(arg use_px4)" />
+        <node pkg="navigation_runner" type="navigation_node.py" name="navigation_node" output="screen" />
+    </group>
+</launch>
