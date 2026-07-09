@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from map_manager.srv import RayCast
 from nav_msgs.msg import Odometry, Path
+from std_msgs.msg import Float32MultiArray
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point, PoseStamped, TwistStamped, Quaternion, Vector3
 from mavros_msgs.msg import PositionTarget, State
@@ -16,6 +17,7 @@ from tensordict.tensordict import TensorDict
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 from navigation_runner.srv import GetPolicyInference
 from utils import vec_to_new_frame
+from visual_follow import VisualFollowConfig, VisualFollowController, VisualTarget
 import math
 from std_srvs.srv import Empty
 import tf.transformations
@@ -42,6 +44,7 @@ class Navigation:
 
         self.height_control = False 
         self.px4_control = rospy.get_param('rl/use_px4', True)
+        self.visual_follow_enabled = rospy.get_param('rl/visual_follow', False)
 
         self.use_policy_server = False
 
@@ -65,6 +68,13 @@ class Navigation:
             self.pose_pub = rospy.Publisher("/CERLAB/quadcopter/setpoint_pose", PoseStamped, queue_size=10)
 
         self.goal_sub = rospy.Subscriber("/move_base_simple/goal", PoseStamped, self.goal_callback)
+        self.visual_target = None
+        self.visual_target_received = False
+        self.visual_target_sub = rospy.Subscriber(
+            rospy.get_param('rl/visual_target_topic', "/visual_follow/target"),
+            Float32MultiArray,
+            self.visual_target_callback,
+        )
         self.raycast_vis_pub = rospy.Publisher("/rl_navigation/raycast", MarkerArray, queue_size=10)
         self.cmd_vis_pub = rospy.Publisher("/rl_navigation/cmd", MarkerArray, queue_size=10)
         self.goal_vis_pub = rospy.Publisher("rl_navigation/goal", MarkerArray, queue_size=10)
@@ -75,6 +85,22 @@ class Navigation:
             self.policy = self.init_model()
             self.policy.eval()
 
+        self.visual_follow_controller = VisualFollowController(
+            VisualFollowConfig(
+                target_area=rospy.get_param('rl/visual_target_area', 0.12),
+                center_deadband=rospy.get_param('rl/visual_center_deadband', 0.05),
+                area_deadband=rospy.get_param('rl/visual_area_deadband', 0.01),
+                yaw_gain=rospy.get_param('rl/visual_yaw_gain', 1.0),
+                forward_gain=rospy.get_param('rl/visual_forward_gain', 2.0),
+                vertical_gain=rospy.get_param('rl/visual_vertical_gain', 0.5),
+                max_forward_speed=rospy.get_param('rl/visual_max_forward_speed', 0.8),
+                max_vertical_speed=rospy.get_param('rl/visual_max_vertical_speed', 0.4),
+                max_yaw_rate=rospy.get_param('rl/visual_max_yaw_rate', 1.2),
+                short_lost_timeout=rospy.get_param('rl/visual_short_lost_timeout', 0.8),
+                lost_command_decay=rospy.get_param('rl/visual_lost_command_decay', 0.25),
+                min_confidence=rospy.get_param('rl/visual_min_confidence', 0.4),
+            )
+        )
 
         # safety thread
         self.safety_stop = False
@@ -233,10 +259,22 @@ class Navigation:
         return static_obstacle_pos, static_obstacle_size, static_obstacle_angle
            
     def raycast_callback(self, event):
-        if not self.odom_received or not self.goal_received:
+        if not self.odom_received:
             return
+
+        if self.visual_follow_enabled:
+            _, _, start_angle = tf.transformations.euler_from_quaternion([
+                self.odom.pose.pose.orientation.x,
+                self.odom.pose.pose.orientation.y,
+                self.odom.pose.pose.orientation.z,
+                self.odom.pose.pose.orientation.w,
+            ])
+        else:
+            if not self.goal_received:
+                return
+            start_angle = np.arctan2(self.target_dir[1].cpu().numpy(), self.target_dir[0].cpu().numpy())
+
         pos = np.array([self.odom.pose.pose.position.x, self.odom.pose.pose.position.y, self.odom.pose.pose.position.z])
-        start_angle = np.arctan2(self.target_dir[1].cpu().numpy(), self.target_dir[0].cpu().numpy())
         self.raypoints = self.get_raycast(pos, start_angle)
 
     def dynamic_obstacle_callback(self, event):
@@ -266,6 +304,13 @@ class Navigation:
 
         self.goal_received = True
         self.stable_times = 0
+
+    def visual_target_callback(self, msg):
+        try:
+            self.visual_target = VisualTarget.from_sequence(msg.data)
+            self.visual_target_received = True
+        except ValueError as err:
+            rospy.logwarn_throttle(1.0, "[nav-ros]: Invalid visual target: %s", err)
 
     def quaternion_to_rotation_matrix(self, quaternion):
         # w, x, y, z = quaternion
@@ -465,6 +510,10 @@ class Navigation:
         if (not self.odom_received):
             return
 
+        if (self.visual_follow_enabled):
+            self.visual_follow_control()
+            return
+
         if (not self.goal_received or len(self.raypoints) == 0 or len(self.dynamic_obstacles) == 0):
             self.pose_pub.publish(self.takeoff_pose)
             return
@@ -574,6 +623,71 @@ class Navigation:
         # self.rollout_traj_pub.publish(traj_msg)
         end_time = time.time()
         # print("[nav-ros]: control time ", end_time - start_time)
+
+    def visual_follow_control(self):
+        if (not self.visual_target_received or len(self.raypoints) == 0 or len(self.dynamic_obstacles) == 0):
+            self.pose_pub.publish(self.takeoff_pose)
+            return
+
+        if (self.safety_stop):
+            self.pose_pub.publish(self.stop_pose)
+            return
+
+        visual_cmd = self.visual_follow_controller.update(self.visual_target)
+        if (not visual_cmd.active):
+            self.pose_pub.publish(self.takeoff_pose)
+            return
+
+        _, _, curr_angle = tf.transformations.euler_from_quaternion([
+            self.odom.pose.pose.orientation.x,
+            self.odom.pose.pose.orientation.y,
+            self.odom.pose.pose.orientation.z,
+            self.odom.pose.pose.orientation.w,
+        ])
+        quat_no_tilt = tf.transformations.quaternion_from_euler(0, 0, curr_angle)
+        quat_msg = Quaternion()
+        quat_msg.w = quat_no_tilt[3]
+        quat_msg.x = quat_no_tilt[0]
+        quat_msg.y = quat_no_tilt[1]
+        quat_msg.z = quat_no_tilt[2]
+        rot_no_tilt = self.quaternion_to_rotation_matrix(quat_msg)
+
+        cmd_vel_local = np.array([visual_cmd.forward_speed, 0.0, visual_cmd.vertical_speed])
+        cmd_vel_world = rot_no_tilt @ cmd_vel_local
+        rot = self.quaternion_to_rotation_matrix(self.odom.pose.pose.orientation)
+        vel_body = np.array([self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z])
+        vel_world = torch.tensor(rot @ vel_body, device=self.cfg.device, dtype=torch.float)
+
+        safe_cmd_vel_world = self.get_safe_action(vel_world, cmd_vel_world)
+        safe_cmd_vel_local = np.linalg.inv(rot_no_tilt) @ safe_cmd_vel_world
+
+        self.cmd_vel_world = cmd_vel_world.copy()
+        self.safe_cmd_vel_world = safe_cmd_vel_world.copy()
+
+        if (self.px4_control):
+            final_cmd_vel = PositionTarget()
+            final_cmd_vel.coordinate_frame = final_cmd_vel.FRAME_LOCAL_NED
+            final_cmd_vel.header.stamp = rospy.Time.now()
+            final_cmd_vel.header.frame_id = "map"
+            final_cmd_vel.velocity.x = safe_cmd_vel_world[0]
+            final_cmd_vel.velocity.y = safe_cmd_vel_world[1]
+            final_cmd_vel.position.z = self.takeoff_pose.pose.position.z
+            final_cmd_vel.yaw_rate = visual_cmd.yaw_rate
+            final_cmd_vel.type_mask = final_cmd_vel.IGNORE_PX + final_cmd_vel.IGNORE_PY + final_cmd_vel.IGNORE_VZ + \
+                final_cmd_vel.IGNORE_AFX + final_cmd_vel.IGNORE_AFY + final_cmd_vel.IGNORE_AFZ + final_cmd_vel.IGNORE_YAW
+        else:
+            final_cmd_vel = TwistStamped()
+            final_cmd_vel.header.stamp = rospy.Time.now()
+            final_cmd_vel.twist.linear.x = safe_cmd_vel_local[0]
+            final_cmd_vel.twist.linear.y = safe_cmd_vel_local[1]
+            if (self.height_control):
+                final_cmd_vel.twist.linear.z = safe_cmd_vel_world[2]
+            else:
+                final_cmd_vel.twist.linear.z = 0
+            final_cmd_vel.twist.angular.z = visual_cmd.yaw_rate
+
+        self.action_pub.publish(final_cmd_vel)
+        self.has_action = True
         
     def pause_sim():
         rospy.wait_for_service('/gazebo/pause_physics')

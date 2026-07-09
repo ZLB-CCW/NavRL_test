@@ -4,9 +4,12 @@
     <arg name="use_real_detector" default="false" />
     <arg name="use_safety_shield" default="true" />
     <arg name="rviz" default="true" />
+    <arg name="visual_follow" default="false" />
+    <arg name="visual_target_classes" default="car" />
     
     <!-- PX4 -->
     <param name="rl/use_px4" value="$(arg use_px4)" />
+    <param name="rl/visual_follow" value="$(arg visual_follow)" />
 
     <!-- mapping -->
     <group if="$(arg use_prebuilt_map)">
@@ -36,7 +39,10 @@
             <rosparam file="$(find navigation_runner)/cfg/detection/sim/real_detector.yaml" ns="/onboard_detector" />
 	    </group>
         <node pkg="onboard_detector" type="detector_node" name="detector_node" output="screen" />
-	    <node pkg="onboard_detector" type="yolo_detector_node.py" name="yolo_detector_node" output="screen" />
+	    <node pkg="onboard_detector" type="yolo_detector_node.py" name="yolo_detector_node" output="screen">
+            <param name="target_classes" value="$(arg visual_target_classes)" />
+            <param name="visual_target_topic" value="/visual_follow/target" />
+        </node>
     </group>
     <group unless="$(arg use_real_detector)">
         <group if="$(arg use_px4)">

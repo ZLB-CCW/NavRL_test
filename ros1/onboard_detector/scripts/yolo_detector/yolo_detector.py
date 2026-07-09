@@ -6,14 +6,16 @@ import torch
 import os
 import std_msgs
 from sensor_msgs.msg import Image
+from std_msgs.msg import Float32MultiArray
 # from sensor_msgs.msg import poin
 from vision_msgs.msg import Detection2DArray
 from vision_msgs.msg import Detection2D
 from cv_bridge import CvBridge
 from utils.tool import handle_preds
 from module.detector import Detector
+from target_utils import build_visual_target
 
-target_classes = ["person"]
+target_classes = ["car"]
 
 
 path_curr = os.path.dirname(__file__)
@@ -29,6 +31,12 @@ class yolo_detector:
 
         self.img_received = False
         self.img_detected = False
+        self.last_target_time = None
+        self.target_classes = rospy.get_param("~target_classes", target_classes)
+        if isinstance(self.target_classes, str):
+            self.target_classes = [name.strip() for name in self.target_classes.split(",") if name.strip()]
+        self.visual_target_topic = rospy.get_param("~visual_target_topic", "/visual_follow/target")
+        self.img_topic = rospy.get_param("~color_image_topic", img_topic)
 
 
         # init and load
@@ -38,12 +46,13 @@ class yolo_detector:
 
         # subscriber
         self.br = CvBridge()
-        self.img_sub = rospy.Subscriber(img_topic, Image, self.image_callback)
+        self.img_sub = rospy.Subscriber(self.img_topic, Image, self.image_callback)
 
         # publisher
         self.img_pub = rospy.Publisher("yolo_detector/detected_image", Image, queue_size=10)
         self.bbox_pub = rospy.Publisher("yolo_detector/detected_bounding_boxes", Detection2DArray, queue_size=10)
         self.time_pub = rospy.Publisher("yolo_detector/yolo_time", std_msgs.msg.Float64, queue_size=1)
+        self.visual_target_pub = rospy.Publisher(self.visual_target_topic, Float32MultiArray, queue_size=10)
 
         # timer
         rospy.Timer(rospy.Duration(0.033), self.detect_callback)
@@ -72,7 +81,7 @@ class yolo_detector:
         if (self.img_detected == True):
             bboxes_msg = Detection2DArray()
             for detected_box in self.detected_bboxes:
-                if (detected_box[4] in target_classes):
+                if (detected_box[4] in self.target_classes):
                     bbox_msg = Detection2D()
                     bbox_msg.bbox.center.x = int(detected_box[0])
                     bbox_msg.bbox.center.y = int(detected_box[1])
@@ -82,6 +91,29 @@ class yolo_detector:
                     bboxes_msg.detections.append(bbox_msg)
                 bboxes_msg.header.stamp = rospy.Time.now()
             self.bbox_pub.publish(bboxes_msg)
+            self.publish_visual_target()
+
+    def publish_visual_target(self):
+        now = rospy.Time.now()
+        if (self.last_target_time is None):
+            lost_time = 999.0
+        else:
+            lost_time = (now - self.last_target_time).to_sec()
+
+        height, width = self.img.shape[:2]
+        target = build_visual_target(
+            self.detected_bboxes,
+            self.target_classes,
+            width,
+            height,
+            lost_time,
+        )
+        if (target[0] >= 0.5):
+            self.last_target_time = now
+
+        msg = Float32MultiArray()
+        msg.data = target
+        self.visual_target_pub.publish(msg)
 
     def inference(self, ori_img):
         # image pre-processing
@@ -112,7 +144,7 @@ class yolo_detector:
             category = LABEL_NAMES[int(box[5])]
             x1, y1 = int(box[0] * W), int(box[1] * H)
             x2, y2 = int(box[2] * W), int(box[3] * H)
-            detected_box = [x1, y1, x2, y2, category]
+            detected_box = [x1, y1, x2, y2, category, obj_score]
             detected_boxes.append(detected_box)
 
             cv2.rectangle(ori_img, (x1, y1), (x2, y2), (255, 255, 0), 2)
