@@ -7,6 +7,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point, PoseStamped, TwistStamped, Quaternion, Vector3
 from mavros_msgs.msg import PositionTarget, State
 from mavros_msgs.srv import CommandBool, CommandBoolRequest, SetMode, SetModeRequest
+from std_msgs.msg import Empty as EmptyMsg, Bool
 from navigation_runner.srv import GetSafeAction, GetSafeActionMap
 from onboard_detector.srv import GetDynamicObstacles
 from map_manager.srv import GetStaticObstacles
@@ -17,7 +18,7 @@ from torchrl.envs.utils import ExplorationType, set_exploration_type
 from navigation_runner.srv import GetPolicyInference
 from utils import vec_to_new_frame
 import math
-from std_srvs.srv import Empty
+from std_srvs.srv import Empty as EmptySrv
 import tf.transformations
 import time
 import threading
@@ -35,6 +36,7 @@ class Navigation:
 
         self.goal = None
         self.goal_received = False
+        self.takeoff_pose = None
         self.target_dir = None
         self.stable_times = 0
         self.has_action = False
@@ -63,6 +65,8 @@ class Navigation:
             self.odom_sub = rospy.Subscriber("/CERLAB/quadcopter/odom", Odometry, self.odom_callback)
             self.action_pub = rospy.Publisher("/CERLAB/quadcopter/cmd_vel", TwistStamped, queue_size=10)
             self.pose_pub = rospy.Publisher("/CERLAB/quadcopter/setpoint_pose", PoseStamped, queue_size=10)
+            self.takeoff_pub = rospy.Publisher("/CERLAB/quadcopter/takeoff", EmptyMsg, queue_size=10)
+            self.posctrl_pub = rospy.Publisher("/CERLAB/quadcopter/posctrl", Bool, queue_size=10)
 
         self.goal_sub = rospy.Subscriber("/move_base_simple/goal", PoseStamped, self.goal_callback)
         self.raycast_vis_pub = rospy.Publisher("/rl_navigation/raycast", MarkerArray, queue_size=10)
@@ -139,6 +143,19 @@ class Navigation:
                 self.pose_pub.publish(pose)
                 rate.sleep()
             last_req = rospy.Time.now()
+        else:
+            posctrl_msg = Bool()
+            posctrl_msg.data = False
+            takeoff_cmd = TwistStamped()
+            takeoff_cmd.twist.linear.z = 0.7
+            for _ in range(10):
+                if rospy.is_shutdown():
+                    break
+                takeoff_cmd.header.stamp = rospy.Time.now()
+                self.takeoff_pub.publish(EmptyMsg())
+                self.posctrl_pub.publish(posctrl_msg)
+                self.action_pub.publish(takeoff_cmd)
+                r.sleep()
         while (not rospy.is_shutdown() and not (np.abs(self.odom.pose.pose.position.z - takeoff_height) <= 0.2)):
             if (self.px4_control):
                 if (self.mavros_state.mode != "OFFBOARD" and (rospy.Time.now() - last_req) > rospy.Duration(5.0)):
@@ -152,8 +169,21 @@ class Navigation:
                             print("[nav-ros]: Vehicle armed.")
 
                         last_req = rospy.Time.now()
+            else:
+                takeoff_cmd.header.stamp = rospy.Time.now()
+                self.posctrl_pub.publish(posctrl_msg)
+                self.action_pub.publish(takeoff_cmd)
+                r.sleep()
+                continue
             self.pose_pub.publish(takeoff_pose)
             r.sleep()
+        if not self.px4_control:
+            hover_cmd = TwistStamped()
+            hover_cmd.header.stamp = rospy.Time.now()
+            self.action_pub.publish(hover_cmd)
+            posctrl_msg.data = True
+            self.posctrl_pub.publish(posctrl_msg)
+            self.pose_pub.publish(takeoff_pose)
         print("[nav-ros]: take off completed at height: ", takeoff_height)
 
 
@@ -254,7 +284,7 @@ class Navigation:
         self.mavros_state = state
     
     def goal_callback(self, goal):
-        if not self.odom_received:
+        if not self.odom_received or self.takeoff_pose is None:
             return
 
         had_goal = self.goal_received
@@ -593,12 +623,12 @@ class Navigation:
         
     def pause_sim():
         rospy.wait_for_service('/gazebo/pause_physics')
-        pause = rospy.ServiceProxy('/gazebo/pause_physics', Empty)
+        pause = rospy.ServiceProxy('/gazebo/pause_physics', EmptySrv)
         pause()
 
     def unpause_sim():
         rospy.wait_for_service('/gazebo/unpause_physics')
-        unpause = rospy.ServiceProxy('/gazebo/unpause_physics', Empty)
+        unpause = rospy.ServiceProxy('/gazebo/unpause_physics', EmptySrv)
         unpause()
 
     def run(self):

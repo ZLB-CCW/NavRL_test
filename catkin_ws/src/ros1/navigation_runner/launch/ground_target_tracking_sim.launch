@@ -1,10 +1,11 @@
 <launch>
     <arg name="use_px4" default="false" />
     <arg name="use_safety_shield" default="true" />
-    <arg name="rviz" default="true" />
+    <arg name="rviz" default="false" />
     <arg name="start_navigation" default="true" />
     <arg name="target_prefix" default="target_car" />
     <arg name="lead_time" default="0.0" />
+    <arg name="python_executable" default="/home/ccw/anaconda3/envs/NavRL/bin/python" />
 
     <include file="$(find uav_simulator)/launch/start.launch">
         <arg name="world_name" value="$(find uav_simulator)/worlds/target_tracking/complex_car_tracking.world" />
@@ -27,6 +28,6 @@
 
     <group if="$(arg start_navigation)">
         <param name="rl/use_px4" value="$(arg use_px4)" />
-        <node pkg="navigation_runner" type="navigation_node.py" name="navigation_node" output="screen" />
+        <node pkg="navigation_runner" type="navigation_node.py" name="navigation_node" output="screen" launch-prefix="$(arg python_executable)" />
     </group>
 </launch>

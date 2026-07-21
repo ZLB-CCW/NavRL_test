@@ -1,5 +1,5 @@
 /*
-  FILE: raycast.cpp
+  FILE: ray_caster.cpp
   -----------------------
   function definition of Raycast
 */
@@ -9,7 +9,7 @@
 #include <Eigen/Eigen>
 #include <cmath>
 #include <iostream>
-#include <map_manager/raycast.h>
+#include <map_manager/ray_caster.h>
 
 int signum(int x) {
   return x == 0 ? 0 : x < 0 ? -1 : 1;

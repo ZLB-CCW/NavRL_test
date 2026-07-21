@@ -1,4 +1,8 @@
 <launch>
+  <env name="GAZEBO_MODEL_PATH" value="$(find uav_simulator)/models:$(optenv GAZEBO_MODEL_PATH)" />
+  <env name="GAZEBO_RESOURCE_PATH" value="$(find uav_simulator)/urdf:$(optenv GAZEBO_RESOURCE_PATH)" />
+  <env name="GAZEBO_PLUGIN_PATH" value="$(find uav_simulator)/plugins:$(optenv GAZEBO_PLUGIN_PATH)" />
+
   <arg name="paused" value="false"/>
   <arg name="verbose" value="false"/>
   <arg name="use_sim_time" value="true"/>

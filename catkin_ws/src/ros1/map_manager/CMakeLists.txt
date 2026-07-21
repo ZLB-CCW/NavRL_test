@@ -13,6 +13,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
   std_msgs
+  geometry_msgs
   message_generation
   cv_bridge
   message_filters
@@ -115,7 +116,7 @@ generate_messages(
 catkin_package(
  INCLUDE_DIRS include
  LIBRARIES map_manager
- CATKIN_DEPENDS roscpp rospy std_msgs cv_bridge onboard_detector
+ CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs message_runtime cv_bridge onboard_detector
  DEPENDS PCL
 )
 
@@ -138,7 +139,7 @@ include_directories(
 # )
 add_library(${PROJECT_NAME} include/${PROJECT_NAME}/occupancyMap.cpp
                             include/${PROJECT_NAME}/ESDFMap.cpp
-                            include/${PROJECT_NAME}/raycast.cpp
+                            include/${PROJECT_NAME}/ray_caster.cpp
                             include/${PROJECT_NAME}/dynamicMap.cpp
                             include/${PROJECT_NAME}/clustering/Kmeans.cpp
                             include/${PROJECT_NAME}/clustering/obstacleClustering.cpp)

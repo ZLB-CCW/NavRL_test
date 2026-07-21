@@ -9,6 +9,7 @@ import numpy as np
 from navigation_runner.srv import GetPolicyInference
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 from tensordict.tensordict import TensorDict
+from ros_hydra import strip_ros_args_from_sys_argv
 
 class policy_server:
     def __init__(self, cfg):
@@ -89,4 +90,5 @@ def main(cfg):
     rospy.spin()
 
 if __name__ == "__main__":
+    strip_ros_args_from_sys_argv()
     main()

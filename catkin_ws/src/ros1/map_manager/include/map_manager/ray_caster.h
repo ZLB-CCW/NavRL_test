@@ -1,5 +1,5 @@
 /*
-  FILE: raycast.h
+  FILE: ray_caster.h
   -----------------------
   header of Raycast        
 */

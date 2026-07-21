@@ -21,7 +21,7 @@
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
-#include <map_manager/raycast.h>
+#include <map_manager/ray_caster.h>
 #include <map_manager/CheckPosCollision.h>
 #include <map_manager/RayCast.h>
 #include <onboard_detector/dynamicDetector.h>
